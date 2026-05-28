@@ -51,12 +51,19 @@ jobs:
           const sakanaLessPath = path.join(htmlDir, 'sakana.less');
           const sakanaMinJsPath = path.join(htmlDir, 'sakana.min.js');
 
+          /**
+           * 默认 PNG 排除列表。
+           * 除了这些文件外，html 目录下其他 PNG 都会被认为是自定义人物模型。
+           */
           const excludedPngNames = new Set([
             'takina.png',
             'chisato.png',
             'blue00f4.png'
           ]);
 
+          /**
+           * 允许内联到 sakana.min.js 的资源类型。
+           */
           const assetMimeTypes = {
             '.png': 'image/png',
             '.m4a': 'audio/x-m4a',
@@ -118,9 +125,15 @@ jobs:
 
             return fs.readdirSync(htmlDir, {
               withFileTypes: true
-            }).filter((item) => item.isFile()).map((item) => item.name);
+            })
+              .filter((item) => item.isFile())
+              .map((item) => item.name);
           }
 
+          /**
+           * 获取某个文件最后一次 Git 提交时间。
+           * 用它来判断哪个自定义模型是最新模型。
+           */
           function getGitLastChangedTimestamp(fileName) {
             const relativePath = `html/${fileName}`;
 
@@ -139,12 +152,23 @@ jobs:
                 return timestamp;
               }
             } catch (error) {
-              // ignore
+              // 如果获取失败，则返回 0。
+              // 正常仓库提交过的图片都会有时间。
             }
 
             return 0;
           }
 
+          /**
+           * 扫描 html 目录下所有自定义 PNG。
+           *
+           * 规则：
+           * - takina.png 排除
+           * - chisato.png 排除
+           * - blue00f4.png 排除
+           * - 其他 png 全部视为自定义角色
+           * - 文件名去掉 .png 后就是角色名
+           */
           function getCustomCharacters() {
             const files = getHtmlFiles();
 
@@ -178,6 +202,13 @@ jobs:
               .sort((a, b) => a.name.localeCompare(b.name, 'en'));
           }
 
+          /**
+           * 获取默认角色。
+           *
+           * 规则：
+           * - 如果存在自定义角色，Git 最近修改的自定义 PNG 作为默认角色
+           * - 如果不存在自定义角色，默认回退到 takina
+           */
           function getLatestDefaultCharacter(customCharacters) {
             if (customCharacters.length === 0) {
               return 'takina';
@@ -194,6 +225,13 @@ jobs:
             return sorted[0].name;
           }
 
+          /**
+           * 向 sakana.js 临时注入自定义角色。
+           *
+           * 注意：
+           * 这里不会写回 html/sakana.js。
+           * 只是在构建 sakana.min.js 时使用注入后的临时代码。
+           */
           function injectCharactersToJs(sourceCode, characters, defaultCharacter) {
             let code = sourceCode;
 
@@ -234,13 +272,26 @@ jobs:
                 code.slice(charactersCloseIndex);
             }
 
-            // 把源码默认角色 takina 替换为最新自定义角色。
+            /**
+             * 修改默认角色。
+             *
+             * 原源码里一般是：
+             * character = 'takina',
+             *
+             * 这里构建时临时替换为：
+             * character = 'WGFunina',
+             */
             code = code.replace(
               /character\s*=\s*['"]takina['"]/,
               `character = ${JSON.stringify(defaultCharacter)}`
             );
 
-            // 允许切换所有角色，而不是只在 chisato/takina 之间切换。
+            /**
+             * 修改切换角色逻辑。
+             *
+             * 原版只在 chisato/takina 之间切换。
+             * 这里改成按 Object.keys(Characters) 顺序切换所有角色。
+             */
             const switchStartText = 'const switchCharacter = v=>{';
             const switchStartIndex = code.indexOf(switchStartText);
 
@@ -272,126 +323,50 @@ jobs:
               newSwitchCharacterCode +
               code.slice(canSwitchIndex);
 
-            // 修复原源码小问题：设置 y 时不应该判断 r。
             code = code.replace('if(r) v.y = y;', 'if(y) v.y = y;');
 
-            // 默认杆子颜色参数改成金色发光模式。
-            code = code.replace(
-              /strokeStyle\s*=\s*['"]#182562['"]/,
-              `strokeStyle = 'gold-glow'`
-            );
-
-            // 给 canvas 杆子增加金黄色渐变发光特效。
-            const originalStrokeCode = 'ctx.strokeStyle = strokeStyle; ctx.lineWidth = 10;';
-            const goldGlowStrokeCode = [
-              `if(strokeStyle === 'gold-glow'){`,
-              `        const goldGradient = ctx.createLinearGradient(-90, 150, 90, -240);`,
-              `        goldGradient.addColorStop(0, 'rgba(255, 178, 36, 0.96)');`,
-              `        goldGradient.addColorStop(0.36, 'rgba(255, 236, 156, 1)');`,
-              `        goldGradient.addColorStop(0.68, 'rgba(255, 205, 72, 0.98)');`,
-              `        goldGradient.addColorStop(1, 'rgba(255, 149, 0, 0.92)');`,
-              `        ctx.strokeStyle = goldGradient;`,
-              `        ctx.lineWidth = 12;`,
-              `        ctx.lineCap = 'round';`,
-              `        ctx.lineJoin = 'round';`,
-              `        ctx.shadowColor = 'rgba(255, 206, 87, 0.95)';`,
-              `        ctx.shadowBlur = 24;`,
-              `      }else{`,
-              `        ctx.strokeStyle = strokeStyle;`,
-              `        ctx.lineWidth = 10;`,
-              `        ctx.shadowBlur = 0;`,
-              `      }`
-            ].join('\n');
-
-            if (code.includes(originalStrokeCode)) {
-              code = code.replace(originalStrokeCode, goldGlowStrokeCode);
-            } else {
-              throw new Error('无法定位 canvas 杆子样式代码');
-            }
-
             return code;
           }
 
+          /**
+           * 向 sakana.less 临时注入自定义角色背景图。
+           *
+           * 注意：
+           * 这里不会写回 html/sakana.less。
+           * 只是在构建 sakana.min.js 时使用注入后的临时代码。
+           */
           function injectCharactersToLess(sourceCode, characters) {
-            let code = sourceCode;
-
-            if (characters.length > 0) {
-              const bedIndex = code.indexOf('.sakana-bed');
-
-              if (bedIndex === -1) {
-                throw new Error('无法定位 html/sakana.less 中的 .sakana-bed');
-              }
-
-              const characterCloseIndex = code.lastIndexOf('}', bedIndex);
-
-              if (characterCloseIndex === -1) {
-                throw new Error('无法定位 html/sakana.less 中 .sakana-character 的结束位置');
-              }
-
-              const lessBlocks = characters.map((character) => {
-                return [
-                  `    &[data-character="${escapeLessString(character.name)}"]{`,
-                  `      background-image: url("${escapeLessString(character.image)}");`,
-                  `    }`
-                ].join('\n');
-              }).join('\n');
-
-              code =
-                code.slice(0, characterCloseIndex) +
-                '\n' +
-                lessBlocks +
-                '\n' +
-                code.slice(characterCloseIndex);
+            if (characters.length === 0) {
+              return sourceCode;
             }
 
-            // 金黄色发光底座特效。
-            code += `
+            const bedIndex = sourceCode.indexOf('.sakana-bed');
 
-          .sakana-box{
-            .sakana-bed{
-              background-image:
-                url("blue00f4.png"),
-                linear-gradient(90deg, rgba(255,179,38,.92), rgba(255,244,177,.98) 48%, rgba(255,188,43,.94));
-              background-repeat: no-repeat, no-repeat;
-              background-position: 50% 50%, 50% 50%;
-              background-size: 20px 20px, 100% 100%;
-              border-radius: 999px;
-              box-shadow:
-                0 0 0 1px rgba(255,236,161,.70),
-                0 0 10px rgba(255,210,86,.72),
-                0 0 26px rgba(255,181,36,.58),
-                0 8px 22px rgba(139,92,0,.28),
-                inset 0 1px 2px rgba(255,255,255,.72),
-                inset 0 -2px 5px rgba(162,91,0,.30);
-              overflow: hidden;
+            if (bedIndex === -1) {
+              throw new Error('无法定位 html/sakana.less 中的 .sakana-bed');
             }
 
-            .sakana-bed::before{
-              content: "";
-              position: absolute;
-              left: 10px;
-              right: 10px;
-              top: 3px;
-              height: 5px;
-              border-radius: 999px;
-              background: linear-gradient(90deg, transparent, rgba(255,255,255,.82), transparent);
-              pointer-events: none;
+            const characterCloseIndex = sourceCode.lastIndexOf('}', bedIndex);
+
+            if (characterCloseIndex === -1) {
+              throw new Error('无法定位 html/sakana.less 中 .sakana-character 的结束位置');
             }
 
-            .sakana-bed::after{
-              content: "";
-              position: absolute;
-              inset: -8px -18px;
-              border-radius: 999px;
-              background: radial-gradient(circle, rgba(255,213,96,.42), transparent 64%);
-              filter: blur(6px);
-              z-index: -1;
-              pointer-events: none;
-            }
-          }
-          `;
+            const lessBlocks = characters.map((character) => {
+              return [
+                `    &[data-character="${escapeLessString(character.name)}"]{`,
+                `      background-image: url("${escapeLessString(character.image)}");`,
+                `    }`
+              ].join('\n');
+            }).join('\n');
 
-            return code;
+            return (
+              sourceCode.slice(0, characterCloseIndex) +
+              '\n' +
+              lessBlocks +
+              '\n' +
+              sourceCode.slice(characterCloseIndex)
+            );
           }
 
           async function compileLessToMinCss(lessCode) {
@@ -423,6 +398,9 @@ jobs:
               .sort((a, b) => b.length - a.length);
           }
 
+          /**
+           * 将 html 下被引用到的 png/m4a/mp3 内联为 data URI。
+           */
           function inlineAssets(code) {
             const fileNames = getInlineAssetFileNames();
 
@@ -518,9 +496,7 @@ jobs:
                 `Size: ${Buffer.byteLength(outputCode)} bytes`,
                 `MD5: ${md5(outputCode)}`,
                 `Default character: ${defaultCharacter}`,
-                `Custom characters: ${characterNames || 'none'}`,
-                `Golden glow rod: enabled`,
-                `Golden glow bed: enabled`
+                `Custom characters: ${characterNames || 'none'}`
               ].join('\n'),
               'utf8'
             );
