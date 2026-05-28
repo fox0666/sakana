@@ -3,7 +3,6 @@
  * Date: 2022-08-28
  * Author: itorr <https://github.com/itorr>
  * Repository: https://github.com/itorr/sakana
- * Rod style: Cyber Aurora gradient — subtle glass glow
  */
 const Sakana = (_=>{
     /* css */
@@ -28,18 +27,18 @@ const Sakana = (_=>{
     // 角色们属性
     const Characters = {
         chisato: {
-            r: 1,
-            y: 40,
-            t: 0,
-            w: 0,
-            d: 0.99
+            r: 1, // 角度
+            y: 40, // 高度
+            t: 0, // 垂直速度
+            w: 0, // 横向速度
+            d: 0.99 // 衰减
         },
         takina: {
-            r: 12,
-            y: 2,
-            t: 0,
-            w: 0,
-            d: 0.988
+            r: 12, // 角度
+            y: 2, // 高度
+            t: 0, // 垂直速度
+            w: 0, // 横向速度
+            d: 0.988 // 衰减
         }
     };
 
@@ -47,55 +46,60 @@ const Sakana = (_=>{
     const Voices = {
         chisato: new Audio('chinanago.m4a'),
         takina: new Audio('sakana.m4a'),
+
         isMute: true
     };
 
     Voices.takina.volume = Voices.chisato.volume = 0.8;
     Voices.takina.muted = Voices.chisato.muted = Voices.isMute;
 
+
     const deepCopy = typeof window.structuredClone === 'function'
         ? v => window.structuredClone(v)
         : v => JSON.parse(JSON.stringify(v));
 
-    const loadImage = (src, onOver) => {
+    const loadImage = (src,onOver)=>{
         const el = new Image();
-        el.onload = _ => onOver(el);
+        el.onload = _=> onOver(el);
         el.src = src;
     };
 
     // 坐标旋转
-    const rotatePoint = (cx, cy, x, y, angle) => {
+    const rotatePoint = (cx, cy, x, y, angle)=> {
         const radians = (Math.PI / 180) * angle;
         const cos = Math.cos(radians);
         const sin = Math.sin(radians);
         const nx = (cos * (x - cx)) + (sin * (y - cy)) + cx;
         const ny = (cos * (y - cy)) - (sin * (x - cx)) + cy;
-        return { x: nx, y: ny };
+        return {
+            x: nx, 
+            y: ny
+        };
     };
 
-    // ── 幻彩杆子绘制 ────────────────────────────────────────────────────────
-    // 在已 translate 的 ctx 中绘制，坐标相对于 translate 后的原点
-    const drawAuroraRod = (ctx, sx, sy, cpx, cpy, ex, ey, tick) => {
-        const bw = 10; // 杆子粗细
+    // ── 幻彩杆子绘制 ──────────────────────────────────────────────────────────
+    // 在已 translate 的 ctx 中绘制，坐标均相对于 translate 后的原点
+    const drawAuroraRod = (ctx, sx, sy, cpx, cpy, ex, ey, tick)=>{
+        const bw = 10;
 
-        // 渐变色：沿杆子方向，color-stop 随 tick 缓慢滑动
-        const slide = Math.sin(tick * 0.022) * 0.16; // ±0.16 平缓游移
-        const makeGrad = () => {
+        // 渐变色随 tick 缓慢滑动，color-stop 位置小幅平移
+        const slide = Math.sin(tick * 0.022) * 0.16;
+        const makeGrad = ()=>{
             const g = ctx.createLinearGradient(sx, sy, ex, ey);
-            g.addColorStop(Math.max(0,            0.00 + slide), 'rgba(34,211,238,0.95)');
+            g.addColorStop(Math.max(0,             0.00 + slide), 'rgba(34,211,238,0.95)');
             g.addColorStop(Math.max(0, Math.min(1, 0.38 + slide)), 'rgba(167,139,250,1)');
             g.addColorStop(Math.max(0, Math.min(1, 0.70 + slide)), 'rgba(251,113,133,0.92)');
-            g.addColorStop(Math.min(1,            1.00),           'rgba(250,204,21,0.88)');
+            g.addColorStop(Math.min(1,             1.00),          'rgba(250,204,21,0.88)');
             return g;
         };
 
-        const path = () => {
+        const path = ()=>{
             ctx.beginPath();
             ctx.moveTo(sx, sy);
             ctx.quadraticCurveTo(cpx, cpy, ex, ey);
         };
 
-        // 层 1 ── 极淡外晕（模拟玻璃材质散射）
+        // 层 1 — 极淡外晕（玻璃散射感）
         ctx.save();
         ctx.strokeStyle = 'rgba(103,232,249,0.12)';
         ctx.lineWidth   = bw + 9;
@@ -105,7 +109,7 @@ const Sakana = (_=>{
         path(); ctx.stroke();
         ctx.restore();
 
-        // 层 2 ── 主体幻彩渐变
+        // 层 2 — 主体幻彩渐变
         ctx.save();
         ctx.strokeStyle = makeGrad();
         ctx.lineWidth   = bw;
@@ -115,7 +119,7 @@ const Sakana = (_=>{
         path(); ctx.stroke();
         ctx.restore();
 
-        // 层 3 ── 中心细亮线（玻璃内芯）
+        // 层 3 — 内芯细亮线（screen 混合）
         ctx.save();
         ctx.globalCompositeOperation = 'screen';
         ctx.globalAlpha  = 0.52;
@@ -128,104 +132,126 @@ const Sakana = (_=>{
         ctx.stroke();
         ctx.restore();
     };
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
 
-    const init = (options = {}) => {
+    const init = (options = {})=>{
         const {
-            decay,
-            onSwitchCharacter = _ => {},
-            scale = 'auto',
-            translateY = 0,
-            canSwitchCharacter = false,
+            decay, // 衰减
+            onSwitchCharacter = _=>{}, // 切换角色回调
+            scale = 'auto', // 元素缩放
+            translateY = 0, // 元素位移
+            canSwitchCharacter = false, // 允许换角色
         } = options;
 
         let {
-            el,
-            character = 'takina',
-            inertia,
-            originRotate = 0,
-            r,
-            y,
+            el, // 启动元素
+            character = 'takina', // 角色
+            inertia, // 惯性
+            originRotate = 0, // 水平度数
+            r, // 初始角度
+            y, // 初始高度
         } = options;
 
-        if (el.constructor === String) el = document.querySelector(el);
-        if (!el) throw new Error('invalid Element');
+        // 兼容字符选择器
+        if(el.constructor === String) el = document.querySelector(el);
 
-        if (!inertia) inertia = 0.08;
-        inertia = Math.min(0.5, Math.max(0, inertia));
+        if(!el) throw new Error('invalid Element');
 
-        const setOriginRotate = or => originRotate = or;
+        if(!inertia) inertia = 0.08;
+        inertia = Math.min(0.5, Math.max(0, inertia))
+
+        const setOriginRotate = or=>originRotate = or;
 
         let v;
-        let _drawTick = 0; // 用于渐变动画
+        let _drawTick = 0; // 渐变动画帧计数
 
         const boxEl = el;
         boxEl.classList.add('sakana-box');
         boxEl.innerHTML = `<canvas></canvas><div class="sakana-character"></div><div class="sakana-bed"></div>`;
-
+        
         const characterEl = boxEl.querySelector('.sakana-character');
-        const bedEl       = boxEl.querySelector('.sakana-bed');
-        const canvas      = boxEl.querySelector('canvas');
-
-        boxEl.style.transform = `translateY(${translateY || 0}) scale(${scale})`;
-
+        const bedEl = boxEl.querySelector('.sakana-bed');
+        const canvas = boxEl.querySelector('canvas');
+        
+        
+        boxEl.style.transform = `translateY(${translateY||0}) scale(${scale})`;
+        
         let running = false;
-
-        const width  = 500;
+        
+        const width = 500;
         const height = 800;
         const superRes = 1;
-
+        
         const dpr = (window.devicePixelRatio || 1) * superRes;
-        canvas.width  = width  * dpr;
-        canvas.height = height * dpr;
-        canvas.style.width  = width  + 'px';
+        const renderWidth = width * dpr;
+        const renderHeight = height * dpr;
+        canvas.width = renderWidth;
+        canvas.height = renderHeight;
+        canvas.style.width = width + 'px';
         canvas.style.height = height + 'px';
-
+        
         const ctx = canvas.getContext('2d');
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.scale(dpr, dpr);
-
-        const draw = _ => {
-            let { r, y, t, w, d } = v;
+        
+        const draw = _=>{
+            
+            let { r,y,t,w,d } = v;
             const x = r * 1;
-
+            const _y = y;
             characterEl.style.transform = `rotate(${r}deg) translateX(${x}px) translateY(${y}px)`;
-
-            ctx.clearRect(0, 0, width, height);
+        
+            ctx.clearRect(0,0,width,height);
             ctx.save();
-            ctx.translate(width / 2, 640);
+            ctx.translate(
+                width / 2 ,
+                640
+            );
 
-            // 计算杆子终点（与原逻辑完全一致）
-            const n  = rotatePoint(0, -100, x, -y, r);
+            const cx = 0;
+            const cy = -100;
+        
+            const n = rotatePoint(
+                cx,
+                cy,
+                x,
+                -y,
+                r
+            );
+        
             const nx = n.x;
             const ny = -n.y - 100;
 
-            // 幻彩杆子
+            // 幻彩杆子（替换原 strokeStyle / ctx.stroke()）
             drawAuroraRod(
                 ctx,
-                0,   140,   // 起点（底座）
-                0,   75,    // 控制点
-                nx,  ny,    // 终点（角色锚点）
+                0,   140,  // 起点（底座连接点）
+                0,   75,   // 贝塞尔控制点
+                nx,  ny,   // 终点（角色锚点）
                 _drawTick++
             );
 
             ctx.restore();
+        
         };
 
-        let lastRunUnix      = +new Date();
-        const defaultFrameUnix = 1000 / 60;
 
-        const run = _ => {
-            if (!running) return;
+        let lastRunUnix = +new Date();
+        const defaultFrameUnix = 1000/60;
+        const run = _=>{
+            if(!running) return;
 
             const runUnix = +new Date();
-            let _inertia  = inertia;
 
-            const diff = runUnix - lastRunUnix;
-            if (diff < 16) _inertia = inertia / defaultFrameUnix * diff;
+            let _inertia = inertia;
+
+            const lastRunUnixDiff = runUnix - lastRunUnix;
+            if(lastRunUnixDiff < 16){
+                _inertia = inertia / defaultFrameUnix * lastRunUnixDiff;
+            }
             lastRunUnix = runUnix;
-
-            let { r, y, t, w, d } = v;
+            
+            let { r,y,t,w,d } = v;
 
             w = w - r * 2 - originRotate;
             r = r + w * _inertia * 1.2;
@@ -237,113 +263,182 @@ const Sakana = (_=>{
             v.t = t * d;
             v.y = y;
 
-            if (Math.max(Math.abs(v.w), Math.abs(v.r), Math.abs(v.t), Math.abs(v.y)) < cut)
-                return running = false;
+            // 小于一定动作时停止重绘 #20
+            if(
+                Math.max(
+                    Math.abs(v.w),
+                    Math.abs(v.r),
+                    Math.abs(v.t),
+                    Math.abs(v.y),
+                ) < cut) return running = false;
 
             requestAnimationFrame(run);
+
             draw();
         };
 
-        const move = (x, y) => {
+
+        const move = (x,y)=>{
             let r = x * sticky;
-            r = Math.max(-maxR, Math.min(maxR, r));
-            y = Math.max(-maxY, Math.min(maxY, y * sticky * 2));
-            v.r = r; v.y = y; v.w = 0; v.t = 0;
-            draw();
-        };
 
-        const onMouseDown = e => {
+            r = Math.max(-maxR,r);
+            r = Math.min(maxR,r);
+
+            y = y * sticky * 2;
+
+            y = Math.max(-maxY,y);
+            y = Math.min(maxY,y);
+
+            v.r = r;
+            v.y = y;
+            v.w = 0;
+            v.t = 0;
+            draw();
+        }
+
+        const onMouseDown = (e) => {
             e.preventDefault();
             running = false;
             const { pageX, pageY } = e;
-            Voices.takina.muted = Voices.chisato.muted = Voices.isMute;
-            v.w = 0; v.t = 0;
+            const _downPageX = pageX;
+            const _downPageY = pageY;
 
-            const onMouseMove = e => {
-                const rect       = boxEl.getBoundingClientRect();
+            Voices.takina.muted = Voices.chisato.muted = Voices.isMute;
+
+            v.w = 0;
+            v.t = 0;
+
+            const onMouseMove = (e) => {
+                const rect = boxEl.getBoundingClientRect();
+
                 const leftCenter = rect.left + rect.width / 2;
-                move(e.pageX - leftCenter, e.pageY - pageY);
+                const topCenter = rect.top;
+
+                const { pageX, pageY } = e;
+
+                let x = pageX - leftCenter;
+                let y = pageY - _downPageY;
+                move(x,y);
             };
-            const onMouseUp = e => {
+            const onMouseUp = (e) => {
                 e.preventDefault();
-                document.removeEventListener('mousemove', onMouseMove);
-                document.removeEventListener('mouseup',   onMouseUp);
+                document.removeEventListener('mousemove',onMouseMove);
+                document.removeEventListener('mouseup',onMouseUp);
+
                 running = true;
                 playVoice();
                 requestAnimationFrame(run);
             };
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup',   onMouseUp);
-        };
-        characterEl.addEventListener('mousedown', onMouseDown);
 
-        const onTouchStart = e => {
+            document.addEventListener('mousemove',onMouseMove);
+            document.addEventListener('mouseup',onMouseUp);
+        };
+        characterEl.addEventListener('mousedown',onMouseDown);
+
+        const onTouchStart = (e) => {
             e.preventDefault();
             running = false;
-            if (!e.touches[0]) return;
-            const { pageX, pageY } = e.touches[0];
-            Voices.takina.muted = Voices.chisato.muted = Voices.isMute;
-            v.w = 0; v.t = 0;
+            if(!e.touches[0]) return;
 
-            const onTouchMove = e => {
-                if (!e.touches[0]) return;
-                const rect       = boxEl.getBoundingClientRect();
+            const { pageX, pageY } = e.touches[0];
+            const _downPageX = pageX;
+            const _downPageY = pageY;
+
+            Voices.takina.muted = Voices.chisato.muted = Voices.isMute;
+
+            v.w = 0;
+            v.t = 0;
+
+            const onTouchMove = (e) => {
+                if(!e.touches[0]) return;
+
+                const rect = boxEl.getBoundingClientRect();
                 const leftCenter = rect.left + rect.width / 2;
-                move(e.touches[0].pageX - leftCenter, e.touches[0].pageY - pageY);
+                const topCenter = rect.top;
+
+                const { pageX, pageY } = e.touches[0];
+
+                let x = pageX - leftCenter;
+                let y = pageY - _downPageY;
+                move(x,y);
             };
-            const onTouchEnd = e => {
-                document.removeEventListener('touchmove', onTouchMove);
-                document.removeEventListener('touchend',  onTouchEnd);
+            const onTouchEnd = (e) => {
+                document.removeEventListener('touchmove',onTouchMove);
+                document.removeEventListener('touchend',onTouchEnd);
+                
                 running = true;
                 playVoice();
                 requestAnimationFrame(run);
-            };
-            document.addEventListener('touchmove', onTouchMove);
-            document.addEventListener('touchend',  onTouchEnd);
-        };
-        characterEl.addEventListener('touchstart', onTouchStart);
+            }
 
-        const confirmRunning = _ => {
-            if (running) return;
+            document.addEventListener('touchmove',onTouchMove);
+            document.addEventListener('touchend',onTouchEnd);
+        };
+        characterEl.addEventListener('touchstart',onTouchStart);
+
+
+        const confirmRunning = _=>{
+            if(running) return;
+
             running = true;
             requestAnimationFrame(run);
         };
+        const setCharacter = character =>{
+            characterEl.setAttribute('data-character',character);
+            const characterValue = Characters[character];
+            if(!characterValue) return;
 
-        const setCharacter = char => {
-            characterEl.setAttribute('data-character', char);
-            const val = Characters[char];
-            if (!val) return;
-            v = deepCopy(val);
-            if (decay) v.d = decay;
-            if (r) v.r = r;
-            if (y) v.y = y;
+            v = deepCopy(characterValue);
+
+            // 自定义衰减
+            if(decay) v.d = decay;
+
+            if(r) v.r = r;
+            if(r) v.y = y;
+
             confirmRunning();
         };
 
-        const switchCharacter = _ => {
-            character = character === 'chisato' ? 'takina' : 'chisato';
+        const switchCharacter = v=>{
+            if(character === 'chisato'){
+                character = 'takina';
+            }else{
+                character = 'chisato';
+            }
+
             setCharacter(character);
+
             onSwitchCharacter(character);
         };
 
-        if (canSwitchCharacter) {
-            boxEl.setAttribute('data-can-switch-character', canSwitchCharacter);
-            bedEl.addEventListener('click', e => { e.preventDefault(); switchCharacter(); });
+        if(canSwitchCharacter){
+            boxEl.setAttribute('data-can-switch-character',canSwitchCharacter);
+            bedEl.addEventListener('click',e=>{
+                e.preventDefault();
+                switchCharacter();
+            });
         }
 
         const playVoice = _ => {
             if (Voices.isMute) return;
+        
             if (character === 'chisato') {
-                if (Math.abs(v.r) <= 4 && Math.abs(v.y) >= 20) {
-                    log('%cchin~a~na~go~', chisatoConsoleStyle);
+                if (
+                    Math.abs(v.r) <= 4
+                    && Math.abs(v.y) >= 20
+                ) {
+                    log('%cchin~a~na~go~',chisatoConsoleStyle);
                     Voices.chisato.play();
-                }
+                };
             } else {
-                if (v.r >= Characters.takina.r && (Math.abs(v.y) <= 12 || v.r >= 3 * Math.abs(v.y))) {
-                    log('%csakana~', takinaConsoleStyle);
+                if (
+                    v.r >= Characters.takina.r
+                    && (Math.abs(v.y) <= 12 || v.r >= 3 * Math.abs(v.y))
+                ) {
+                    log('%csakana~',takinaConsoleStyle);
                     Voices.takina.play();
-                }
-            }
+                };
+            };
         };
 
         setCharacter(character);
@@ -353,37 +448,78 @@ const Sakana = (_=>{
             switchCharacter,
             setOriginRotate,
             confirmRunning,
-            pause()   { running = false; },
-            play()    { confirmRunning(); },
-            getValue()    { return v; },
-            getRunning()  { return running; },
-            destroy() { running = false; el.innerHTML = ''; }
-        };
+            pause(){
+                running = false;
+            },
+            play(){
+                confirmRunning();
+            },
+            getValue(){
+                return v;
+            },
+            getRunning(){
+                return running;
+            },
+            destroy(){
+                running = false,
+                el.innerHTML = '';
+            }
+        }
     };
 
-    const baseURL           = 'https://lab.magiconch.com/sakana/';
-    const twitterURL        = 'https://twitter.com/blue00f4/';
+    const baseURL = 'https://lab.magiconch.com/sakana/';
+    const twitterURL = 'https://twitter.com/blue00f4/';
     const githubRepositoryURL = 'https://github.com/itorr/sakana';
-
-    log(`%c錦木千束 ${baseURL}?v=chisato`,             chisatoConsoleStyle);
-    log(`%c井ノ上たきな ${baseURL}?v=takina`,           takinaConsoleStyle);
-    log(`%c永续超慢速%c${baseURL}?inertia=0.001&decay=1`, chisatoConsoleStyle, takinaConsoleStyle);
-    log('绘: %c大伏アオ %c已取得在网页中使用的非商用授权', 'font-weight:bold', 'color:#C34',
-        twitterURL + 'status/1551887529615687680',
-        twitterURL + 'status/1552066743853813760');
-    log('微博',   'https://weibo.com/1197780522/M2xbREtGI');
-    log('Github', githubRepositoryURL);
-    log('问题反馈', `${githubRepositoryURL}/issues`);
+    log(
+        `%c錦木千束 ${baseURL}?v=chisato`,
+        chisatoConsoleStyle,
+    );
+    log(
+        `%c井ノ上たきな ${baseURL}?v=takina`,
+        takinaConsoleStyle,
+    );
+    
+    log(
+        `%c永续超慢速%c${baseURL}?inertia=0.001&decay=1`,
+        chisatoConsoleStyle,
+        takinaConsoleStyle,
+    );
+    
+    log(
+        '绘: %c大伏アオ %c已取得在网页中使用的非商用授权',
+        'font-weight:bold',
+        'color:#C34',
+    
+        twitterURL+'status/1551887529615687680',
+        twitterURL+'status/1552066743853813760',
+    );
+    
+    log(
+        '微博',
+        'https://weibo.com/1197780522/M2xbREtGI',
+    );
+    log(
+        'Github',
+        githubRepositoryURL,
+    );
+    log(
+        '问题反馈',
+        `${githubRepositoryURL}/issues`,
+    );
+    
 
     return {
         init,
         Voices,
-        setMute(_isMute) {
+        setMute(_isMute){
             Voices.isMute = _isMute;
-            Voices.takina.muted = Voices.chisato.muted = _isMute;
+
+            Voices.takina.muted = 
+            Voices.chisato.muted = _isMute;
         }
     };
 })();
 
+
 if (typeof module === 'object' && module.exports)
-    module.exports = Sakana;
+	module.exports = Sakana
