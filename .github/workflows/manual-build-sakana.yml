@@ -39,6 +39,7 @@ jobs:
           const fs = require('fs');
           const path = require('path');
           const crypto = require('crypto');
+          const childProcess = require('child_process');
           const less = require('less');
           const CleanCSS = require('clean-css');
           const UglifyJS = require('uglify-es');
@@ -120,13 +121,36 @@ jobs:
             }).filter((item) => item.isFile()).map((item) => item.name);
           }
 
+          function getGitLastChangedTimestamp(fileName) {
+            const relativePath = `html/${fileName}`;
+
+            try {
+              const output = childProcess
+                .execSync(`git log -1 --format=%ct -- "${relativePath}"`, {
+                  cwd: rootDir,
+                  encoding: 'utf8',
+                  stdio: ['ignore', 'pipe', 'ignore']
+                })
+                .trim();
+
+              const timestamp = Number(output);
+
+              if (Number.isFinite(timestamp) && timestamp > 0) {
+                return timestamp;
+              }
+            } catch (error) {
+              // ignore
+            }
+
+            return 0;
+          }
+
           function getCustomCharacters() {
             const files = getHtmlFiles();
 
             return files
               .filter((fileName) => path.extname(fileName).toLowerCase() === '.png')
               .filter((fileName) => !excludedPngNames.has(fileName.toLowerCase()))
-              .sort((a, b) => a.localeCompare(b, 'en'))
               .map((fileName) => {
                 const characterName = path.basename(fileName, path.extname(fileName));
 
@@ -141,6 +165,7 @@ jobs:
                 return {
                   name: characterName,
                   image: fileName,
+                  changedAt: getGitLastChangedTimestamp(fileName),
                   state: {
                     r: 1,
                     y: 40,
@@ -149,10 +174,27 @@ jobs:
                     d: 0.99
                   }
                 };
-              });
+              })
+              .sort((a, b) => a.name.localeCompare(b.name, 'en'));
           }
 
-          function injectCharactersToJs(sourceCode, characters) {
+          function getLatestDefaultCharacter(customCharacters) {
+            if (customCharacters.length === 0) {
+              return 'takina';
+            }
+
+            const sorted = [...customCharacters].sort((a, b) => {
+              if (b.changedAt !== a.changedAt) {
+                return b.changedAt - a.changedAt;
+              }
+
+              return b.name.localeCompare(a.name, 'en');
+            });
+
+            return sorted[0].name;
+          }
+
+          function injectCharactersToJs(sourceCode, characters, defaultCharacter) {
             let code = sourceCode;
 
             const audioMarker = '// 音效';
@@ -192,6 +234,13 @@ jobs:
                 code.slice(charactersCloseIndex);
             }
 
+            // 把源码默认角色 takina 替换为最新自定义角色。
+            code = code.replace(
+              /character\s*=\s*['"]takina['"]/,
+              `character = ${JSON.stringify(defaultCharacter)}`
+            );
+
+            // 允许切换所有角色，而不是只在 chisato/takina 之间切换。
             const switchStartText = 'const switchCharacter = v=>{';
             const switchStartIndex = code.indexOf(switchStartText);
 
@@ -223,43 +272,126 @@ jobs:
               newSwitchCharacterCode +
               code.slice(canSwitchIndex);
 
+            // 修复原源码小问题：设置 y 时不应该判断 r。
             code = code.replace('if(r) v.y = y;', 'if(y) v.y = y;');
+
+            // 默认杆子颜色参数改成金色发光模式。
+            code = code.replace(
+              /strokeStyle\s*=\s*['"]#182562['"]/,
+              `strokeStyle = 'gold-glow'`
+            );
+
+            // 给 canvas 杆子增加金黄色渐变发光特效。
+            const originalStrokeCode = 'ctx.strokeStyle = strokeStyle; ctx.lineWidth = 10;';
+            const goldGlowStrokeCode = [
+              `if(strokeStyle === 'gold-glow'){`,
+              `        const goldGradient = ctx.createLinearGradient(-90, 150, 90, -240);`,
+              `        goldGradient.addColorStop(0, 'rgba(255, 178, 36, 0.96)');`,
+              `        goldGradient.addColorStop(0.36, 'rgba(255, 236, 156, 1)');`,
+              `        goldGradient.addColorStop(0.68, 'rgba(255, 205, 72, 0.98)');`,
+              `        goldGradient.addColorStop(1, 'rgba(255, 149, 0, 0.92)');`,
+              `        ctx.strokeStyle = goldGradient;`,
+              `        ctx.lineWidth = 12;`,
+              `        ctx.lineCap = 'round';`,
+              `        ctx.lineJoin = 'round';`,
+              `        ctx.shadowColor = 'rgba(255, 206, 87, 0.95)';`,
+              `        ctx.shadowBlur = 24;`,
+              `      }else{`,
+              `        ctx.strokeStyle = strokeStyle;`,
+              `        ctx.lineWidth = 10;`,
+              `        ctx.shadowBlur = 0;`,
+              `      }`
+            ].join('\n');
+
+            if (code.includes(originalStrokeCode)) {
+              code = code.replace(originalStrokeCode, goldGlowStrokeCode);
+            } else {
+              throw new Error('无法定位 canvas 杆子样式代码');
+            }
 
             return code;
           }
 
           function injectCharactersToLess(sourceCode, characters) {
-            if (characters.length === 0) {
-              return sourceCode;
+            let code = sourceCode;
+
+            if (characters.length > 0) {
+              const bedIndex = code.indexOf('.sakana-bed');
+
+              if (bedIndex === -1) {
+                throw new Error('无法定位 html/sakana.less 中的 .sakana-bed');
+              }
+
+              const characterCloseIndex = code.lastIndexOf('}', bedIndex);
+
+              if (characterCloseIndex === -1) {
+                throw new Error('无法定位 html/sakana.less 中 .sakana-character 的结束位置');
+              }
+
+              const lessBlocks = characters.map((character) => {
+                return [
+                  `    &[data-character="${escapeLessString(character.name)}"]{`,
+                  `      background-image: url("${escapeLessString(character.image)}");`,
+                  `    }`
+                ].join('\n');
+              }).join('\n');
+
+              code =
+                code.slice(0, characterCloseIndex) +
+                '\n' +
+                lessBlocks +
+                '\n' +
+                code.slice(characterCloseIndex);
             }
 
-            const bedIndex = sourceCode.indexOf('.sakana-bed');
+            // 金黄色发光底座特效。
+            code += `
 
-            if (bedIndex === -1) {
-              throw new Error('无法定位 html/sakana.less 中的 .sakana-bed');
+          .sakana-box{
+            .sakana-bed{
+              background-image:
+                url("blue00f4.png"),
+                linear-gradient(90deg, rgba(255,179,38,.92), rgba(255,244,177,.98) 48%, rgba(255,188,43,.94));
+              background-repeat: no-repeat, no-repeat;
+              background-position: 50% 50%, 50% 50%;
+              background-size: 20px 20px, 100% 100%;
+              border-radius: 999px;
+              box-shadow:
+                0 0 0 1px rgba(255,236,161,.70),
+                0 0 10px rgba(255,210,86,.72),
+                0 0 26px rgba(255,181,36,.58),
+                0 8px 22px rgba(139,92,0,.28),
+                inset 0 1px 2px rgba(255,255,255,.72),
+                inset 0 -2px 5px rgba(162,91,0,.30);
+              overflow: hidden;
             }
 
-            const characterCloseIndex = sourceCode.lastIndexOf('}', bedIndex);
-
-            if (characterCloseIndex === -1) {
-              throw new Error('无法定位 html/sakana.less 中 .sakana-character 的结束位置');
+            .sakana-bed::before{
+              content: "";
+              position: absolute;
+              left: 10px;
+              right: 10px;
+              top: 3px;
+              height: 5px;
+              border-radius: 999px;
+              background: linear-gradient(90deg, transparent, rgba(255,255,255,.82), transparent);
+              pointer-events: none;
             }
 
-            const lessBlocks = characters.map((character) => {
-              return [
-                `    &[data-character="${escapeLessString(character.name)}"]{`,
-                `      background-image: url("${escapeLessString(character.image)}");`,
-                `    }`
-              ].join('\n');
-            }).join('\n');
+            .sakana-bed::after{
+              content: "";
+              position: absolute;
+              inset: -8px -18px;
+              border-radius: 999px;
+              background: radial-gradient(circle, rgba(255,213,96,.42), transparent 64%);
+              filter: blur(6px);
+              z-index: -1;
+              pointer-events: none;
+            }
+          }
+          `;
 
-            return (
-              sourceCode.slice(0, characterCloseIndex) +
-              '\n' +
-              lessBlocks +
-              '\n' +
-              sourceCode.slice(characterCloseIndex)
-            );
+            return code;
           }
 
           async function compileLessToMinCss(lessCode) {
@@ -315,22 +447,27 @@ jobs:
             assertFileExists(sakanaLessPath);
 
             const customCharacters = getCustomCharacters();
+            const defaultCharacter = getLatestDefaultCharacter(customCharacters);
 
             console.log('检测到自定义角色:');
+
             if (customCharacters.length === 0) {
               console.log('  无');
             } else {
               for (const character of customCharacters) {
-                console.log(`  ${character.name} <= html/${character.image}`);
+                console.log(`  ${character.name} <= html/${character.image}, changedAt=${character.changedAt}`);
               }
             }
+
+            console.log(`默认角色: ${defaultCharacter}`);
 
             const originalSakanaJs = fs.readFileSync(sakanaJsPath, 'utf8');
             const originalSakanaLess = fs.readFileSync(sakanaLessPath, 'utf8');
 
             const sakanaJsWithCharacters = injectCharactersToJs(
               originalSakanaJs,
-              customCharacters
+              customCharacters,
+              defaultCharacter
             );
 
             const sakanaLessWithCharacters = injectCharactersToLess(
@@ -369,12 +506,21 @@ jobs:
             );
 
             fs.writeFileSync(
+              '.sakana-default-character.txt',
+              defaultCharacter,
+              'utf8'
+            );
+
+            fs.writeFileSync(
               '.sakana-build-summary.txt',
               [
                 `Generated: html/sakana.min.js`,
                 `Size: ${Buffer.byteLength(outputCode)} bytes`,
                 `MD5: ${md5(outputCode)}`,
-                `Custom characters: ${characterNames || 'none'}`
+                `Default character: ${defaultCharacter}`,
+                `Custom characters: ${characterNames || 'none'}`,
+                `Golden glow rod: enabled`,
+                `Golden glow bed: enabled`
               ].join('\n'),
               'utf8'
             );
@@ -403,16 +549,18 @@ jobs:
 
           if git diff --quiet -- html/sakana.min.js; then
             echo "html/sakana.min.js 没有变化，无需提交。"
-            rm -f .sakana-characters.txt
+            rm -f .sakana-characters.txt .sakana-default-character.txt
             exit 0
           fi
 
           CHARACTERS="$(cat .sakana-characters.txt 2>/dev/null || echo default-only)"
-          rm -f .sakana-characters.txt
+          DEFAULT_CHARACTER="$(cat .sakana-default-character.txt 2>/dev/null || echo takina)"
+
+          rm -f .sakana-characters.txt .sakana-default-character.txt
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add html/sakana.min.js
-          git commit -m "build: update sakana.min.js for ${CHARACTERS}"
+          git commit -m "build: update sakana.min.js default ${DEFAULT_CHARACTER} for ${CHARACTERS}"
           git push origin HEAD:${GITHUB_REF_NAME}
