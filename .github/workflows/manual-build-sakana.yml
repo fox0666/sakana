@@ -1,0 +1,418 @@
+name: Manual Build Sakana
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: manual-build-sakana-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build html/sakana.min.js
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install build dependencies
+        run: |
+          npm install --no-save --no-package-lock --no-audit --no-fund clean-css@5.3.1 uglify-es@3.3.9 less@4.2.0
+
+      - name: Build sakana.min.js
+        shell: bash
+        run: |
+          cat > .sakana-build-auto.cjs <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const crypto = require('crypto');
+          const less = require('less');
+          const CleanCSS = require('clean-css');
+          const UglifyJS = require('uglify-es');
+
+          const rootDir = process.cwd();
+          const htmlDir = path.join(rootDir, 'html');
+
+          const sakanaJsPath = path.join(htmlDir, 'sakana.js');
+          const sakanaLessPath = path.join(htmlDir, 'sakana.less');
+          const sakanaMinJsPath = path.join(htmlDir, 'sakana.min.js');
+
+          const excludedPngNames = new Set([
+            'takina.png',
+            'chisato.png',
+            'blue00f4.png'
+          ]);
+
+          const assetMimeTypes = {
+            '.png': 'image/png',
+            '.m4a': 'audio/x-m4a',
+            '.mp3': 'audio/mpeg'
+          };
+
+          const uglifyOptions = {
+            parse: {},
+            compress: {
+              drop_console: false
+            },
+            mangle: {},
+            output: {
+              comments: false
+            },
+            sourceMap: false,
+            ecma: 8,
+            keep_fnames: false,
+            keep_classnames: false,
+            toplevel: false,
+            warnings: false
+          };
+
+          function assertFileExists(filePath) {
+            if (!fs.existsSync(filePath)) {
+              throw new Error(`文件不存在: ${filePath}`);
+            }
+          }
+
+          function md5(content) {
+            return crypto.createHash('md5').update(content).digest('hex');
+          }
+
+          function escapeRegExp(value) {
+            return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          }
+
+          function escapeLessString(value) {
+            return String(value)
+              .replace(/\\/g, '/')
+              .replace(/"/g, '\\"');
+          }
+
+          function getMimeType(fileName) {
+            const ext = path.extname(fileName).toLowerCase();
+            const mimeType = assetMimeTypes[ext];
+
+            if (!mimeType) {
+              throw new Error(`不支持的资源类型: ${fileName}`);
+            }
+
+            return mimeType;
+          }
+
+          function getHtmlFiles() {
+            if (!fs.existsSync(htmlDir)) {
+              throw new Error('缺少 html 目录');
+            }
+
+            return fs.readdirSync(htmlDir, {
+              withFileTypes: true
+            }).filter((item) => item.isFile()).map((item) => item.name);
+          }
+
+          function getCustomCharacters() {
+            const files = getHtmlFiles();
+
+            return files
+              .filter((fileName) => path.extname(fileName).toLowerCase() === '.png')
+              .filter((fileName) => !excludedPngNames.has(fileName.toLowerCase()))
+              .sort((a, b) => a.localeCompare(b, 'en'))
+              .map((fileName) => {
+                const characterName = path.basename(fileName, path.extname(fileName));
+
+                if (!/^[A-Za-z0-9_-]+$/.test(characterName)) {
+                  throw new Error(
+                    `非法角色图片文件名: ${fileName}\n` +
+                    `文件名只能使用英文字母、数字、下划线、中划线。\n` +
+                    `例如: WGFunina.png、miku.png、role_01.png`
+                  );
+                }
+
+                return {
+                  name: characterName,
+                  image: fileName,
+                  state: {
+                    r: 1,
+                    y: 40,
+                    t: 0,
+                    w: 0,
+                    d: 0.99
+                  }
+                };
+              });
+          }
+
+          function injectCharactersToJs(sourceCode, characters) {
+            let code = sourceCode;
+
+            const audioMarker = '// 音效';
+            const audioMarkerIndex = code.indexOf(audioMarker);
+
+            if (audioMarkerIndex === -1) {
+              throw new Error('无法定位 html/sakana.js 中的 // 音效 标记');
+            }
+
+            const beforeAudioMarker = code.slice(0, audioMarkerIndex);
+            const charactersCloseIndex = beforeAudioMarker.lastIndexOf('};');
+
+            if (charactersCloseIndex === -1) {
+              throw new Error('无法定位 html/sakana.js 中的 Characters 结束位置');
+            }
+
+            if (characters.length > 0) {
+              const characterBlocks = characters.map((character) => {
+                const state = character.state;
+
+                return [
+                  `  ${JSON.stringify(character.name)}: {`,
+                  `    r: ${state.r},`,
+                  `    y: ${state.y},`,
+                  `    t: ${state.t},`,
+                  `    w: ${state.w},`,
+                  `    d: ${state.d}`,
+                  `  }`
+                ].join('\n');
+              }).join(',\n');
+
+              code =
+                code.slice(0, charactersCloseIndex) +
+                ',\n' +
+                characterBlocks +
+                '\n' +
+                code.slice(charactersCloseIndex);
+            }
+
+            const switchStartText = 'const switchCharacter = v=>{';
+            const switchStartIndex = code.indexOf(switchStartText);
+
+            if (switchStartIndex === -1) {
+              throw new Error('无法定位 switchCharacter 函数');
+            }
+
+            const canSwitchMarker = 'if(canSwitchCharacter)';
+            const canSwitchIndex = code.indexOf(canSwitchMarker, switchStartIndex);
+
+            if (canSwitchIndex === -1) {
+              throw new Error('无法定位 if(canSwitchCharacter)');
+            }
+
+            const newSwitchCharacterCode = [
+              'const switchCharacter = _=>{',
+              '      const characterNames = Object.keys(Characters);',
+              '      const currentIndex = characterNames.indexOf(character);',
+              '      const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % characterNames.length;',
+              '      character = characterNames[nextIndex];',
+              '      setCharacter(character);',
+              '      onSwitchCharacter(character);',
+              '    };',
+              '    '
+            ].join('\n');
+
+            code =
+              code.slice(0, switchStartIndex) +
+              newSwitchCharacterCode +
+              code.slice(canSwitchIndex);
+
+            code = code.replace('if(r) v.y = y;', 'if(y) v.y = y;');
+
+            return code;
+          }
+
+          function injectCharactersToLess(sourceCode, characters) {
+            if (characters.length === 0) {
+              return sourceCode;
+            }
+
+            const bedIndex = sourceCode.indexOf('.sakana-bed');
+
+            if (bedIndex === -1) {
+              throw new Error('无法定位 html/sakana.less 中的 .sakana-bed');
+            }
+
+            const characterCloseIndex = sourceCode.lastIndexOf('}', bedIndex);
+
+            if (characterCloseIndex === -1) {
+              throw new Error('无法定位 html/sakana.less 中 .sakana-character 的结束位置');
+            }
+
+            const lessBlocks = characters.map((character) => {
+              return [
+                `    &[data-character="${escapeLessString(character.name)}"]{`,
+                `      background-image: url("${escapeLessString(character.image)}");`,
+                `    }`
+              ].join('\n');
+            }).join('\n');
+
+            return (
+              sourceCode.slice(0, characterCloseIndex) +
+              '\n' +
+              lessBlocks +
+              '\n' +
+              sourceCode.slice(characterCloseIndex)
+            );
+          }
+
+          async function compileLessToMinCss(lessCode) {
+            const result = await less.render(lessCode, {
+              paths: [htmlDir],
+              filename: sakanaLessPath,
+              compress: false,
+              javascriptEnabled: false
+            });
+
+            const minified = new CleanCSS({
+              report: 'min',
+              sourceMap: false
+            }).minify(result.css);
+
+            if (minified.errors && minified.errors.length > 0) {
+              throw new Error(`CSS 压缩失败:\n${minified.errors.join('\n')}`);
+            }
+
+            return minified.styles;
+          }
+
+          function getInlineAssetFileNames() {
+            return getHtmlFiles()
+              .filter((fileName) => {
+                const ext = path.extname(fileName).toLowerCase();
+                return Object.prototype.hasOwnProperty.call(assetMimeTypes, ext);
+              })
+              .sort((a, b) => b.length - a.length);
+          }
+
+          function inlineAssets(code) {
+            const fileNames = getInlineAssetFileNames();
+
+            if (fileNames.length === 0) {
+              return code;
+            }
+
+            const assetRegExp = new RegExp(
+              `(${fileNames.map(escapeRegExp).join('|')})`,
+              'g'
+            );
+
+            return code.replace(assetRegExp, (fileName) => {
+              const filePath = path.join(htmlDir, fileName);
+              const base64 = fs.readFileSync(filePath).toString('base64');
+              return `data:${getMimeType(fileName)};base64,${base64}`;
+            });
+          }
+
+          async function main() {
+            assertFileExists(sakanaJsPath);
+            assertFileExists(sakanaLessPath);
+
+            const customCharacters = getCustomCharacters();
+
+            console.log('检测到自定义角色:');
+            if (customCharacters.length === 0) {
+              console.log('  无');
+            } else {
+              for (const character of customCharacters) {
+                console.log(`  ${character.name} <= html/${character.image}`);
+              }
+            }
+
+            const originalSakanaJs = fs.readFileSync(sakanaJsPath, 'utf8');
+            const originalSakanaLess = fs.readFileSync(sakanaLessPath, 'utf8');
+
+            const sakanaJsWithCharacters = injectCharactersToJs(
+              originalSakanaJs,
+              customCharacters
+            );
+
+            const sakanaLessWithCharacters = injectCharactersToLess(
+              originalSakanaLess,
+              customCharacters
+            );
+
+            const minCss = await compileLessToMinCss(sakanaLessWithCharacters);
+
+            const jsWithCss = sakanaJsWithCharacters.replace(
+              '/* css */',
+              `const styleEl = document.createElement('style');styleEl.innerHTML=${JSON.stringify(minCss)};document.head.appendChild(styleEl);`
+            );
+
+            if (jsWithCss === sakanaJsWithCharacters) {
+              throw new Error('CSS 注入失败，未找到 /* css */ 标记');
+            }
+
+            const minifiedJsResult = UglifyJS.minify(jsWithCss, uglifyOptions);
+
+            if (minifiedJsResult.error) {
+              throw minifiedJsResult.error;
+            }
+
+            let outputCode = minifiedJsResult.code;
+            outputCode = inlineAssets(outputCode);
+
+            fs.writeFileSync(sakanaMinJsPath, outputCode, 'utf8');
+
+            const characterNames = customCharacters.map((item) => item.name).join(', ');
+
+            fs.writeFileSync(
+              '.sakana-characters.txt',
+              characterNames || 'default-only',
+              'utf8'
+            );
+
+            fs.writeFileSync(
+              '.sakana-build-summary.txt',
+              [
+                `Generated: html/sakana.min.js`,
+                `Size: ${Buffer.byteLength(outputCode)} bytes`,
+                `MD5: ${md5(outputCode)}`,
+                `Custom characters: ${characterNames || 'none'}`
+              ].join('\n'),
+              'utf8'
+            );
+
+            console.log('构建完成');
+            console.log(fs.readFileSync('.sakana-build-summary.txt', 'utf8'));
+          }
+
+          main().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+
+          node .sakana-build-auto.cjs
+
+      - name: Show build summary
+        run: |
+          cat .sakana-build-summary.txt
+          ls -lh html/sakana.min.js
+
+      - name: Commit generated sakana.min.js
+        shell: bash
+        run: |
+          rm -f .sakana-build-auto.cjs .sakana-build-summary.txt
+
+          if git diff --quiet -- html/sakana.min.js; then
+            echo "html/sakana.min.js 没有变化，无需提交。"
+            rm -f .sakana-characters.txt
+            exit 0
+          fi
+
+          CHARACTERS="$(cat .sakana-characters.txt 2>/dev/null || echo default-only)"
+          rm -f .sakana-characters.txt
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add html/sakana.min.js
+          git commit -m "build: update sakana.min.js for ${CHARACTERS}"
+          git push origin HEAD:${GITHUB_REF_NAME}
